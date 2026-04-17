@@ -14,7 +14,8 @@
             --primary: #007bff;
             --success: #34a853;
             --danger: #ea4335;
-            --poi: #6c757d;
+            --poi-shop: #fd7e14; /* Orange for Supermarkets/Grocery */
+            --poi-other: #007bff; /* Blue for Landmarks */
             --bg-glass: rgba(255, 255, 255, 0.95);
         }
 
@@ -33,6 +34,21 @@
             font-size: 16px; outline: none; background: var(--bg-glass);
             backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
         }
+        
+        /* Category Quick Buttons */
+        .category-chips {
+            display: flex; gap: 8px; margin-top: 10px; overflow-x: auto;
+            padding-bottom: 5px; scrollbar-width: none;
+        }
+        .category-chips::-webkit-scrollbar { display: none; }
+        .chip {
+            background: var(--bg-glass); padding: 8px 16px; border-radius: 20px;
+            font-size: 12px; font-weight: 600; white-space: nowrap;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08); cursor: pointer;
+            border: 1px solid rgba(0,0,0,0.03); transition: all 0.2s;
+        }
+        .chip:hover { background: white; transform: translateY(-1px); }
+
         #search-results {
             background: white; border-radius: 16px; margin-top: 8px;
             max-height: 400px; overflow-y: auto; box-shadow: 0 10px 25px rgba(0,0,0,0.15);
@@ -76,18 +92,25 @@
 
         /* POI Markers */
         .poi-dot {
-            width: 10px; height: 10px; background: var(--primary);
+            width: 12px; height: 12px; 
             border: 2px solid white; border-radius: 50%;
             box-shadow: 0 0 5px rgba(0,0,0,0.3);
         }
+        .poi-dot.poi-shop { background: var(--poi-shop); }
+        .poi-dot.poi-other { background: var(--poi-other); }
 
         /* General UI */
-        #status {
+        #status-container {
             position: absolute; bottom: 35px; left: 50%; transform: translateX(-50%);
             z-index: 2000; background: rgba(0,0,0,0.85); color: white;
-            padding: 12px 28px; border-radius: 35px; font-size: 13px;
-            display: none; text-align: center; max-width: 85%;
+            padding: 10px 24px; border-radius: 35px; font-size: 13px;
+            display: none; align-items: center; gap: 15px; max-width: 85%;
+            backdrop-filter: blur(4px);
         }
+        #status-text { white-space: nowrap; }
+        .legend { display: flex; gap: 10px; border-left: 1px solid rgba(255,255,255,0.3); padding-left: 15px; }
+        .legend-item { display: flex; align-items: center; gap: 5px; font-size: 10px; text-transform: uppercase; }
+        .legend-dot { width: 8px; height: 8px; border-radius: 50%; border: 1px solid white; }
 
         /* Popups */
         .popup-form { min-width: 240px; padding: 5px; }
@@ -121,7 +144,14 @@
 <body>
 
     <div id="map"></div>
-    <div id="status">Discovering nearby places...</div>
+    
+    <div id="status-container">
+        <span id="status-text">Discovering...</span>
+        <div class="legend">
+            <div class="legend-item"><div class="legend-dot" style="background:var(--poi-shop)"></div> Supermart</div>
+            <div class="legend-item"><div class="legend-dot" style="background:var(--poi-other)"></div> Landmark</div>
+        </div>
+    </div>
 
     <div id="route-panel">
         <h4>Route Optimizer</h4>
@@ -146,7 +176,13 @@
     </div>
 
     <div class="search-container">
-        <input type="text" id="search-input" placeholder="Search shops, monuments, addresses..." autocomplete="off">
+        <input type="text" id="search-input" placeholder="Search places, supermarts..." autocomplete="off">
+        <div class="category-chips">
+            <div class="chip" onclick="quickSearch('Supermarket')">🛒 Supermarts</div>
+            <div class="chip" onclick="quickSearch('Monument')">🏛️ Monuments</div>
+            <div class="chip" onclick="quickSearch('Cafe')">☕ Cafes</div>
+            <div class="chip" onclick="quickSearch('Hotel')">🏨 Hotels</div>
+        </div>
         <div id="search-results"></div>
     </div>
 
@@ -179,7 +215,7 @@
             let lastFetchCenter = null;
             let lastFetchZoom = 0;
 
-            // --- POI DISCOVERY ENGINE (Overpass API) ---
+            // --- POI DISCOVERY ENGINE ---
             let poiTimeout;
             map.on('moveend', () => {
                 clearTimeout(poiTimeout);
@@ -188,14 +224,9 @@
                     poiLayer.clearLayers();
                     return;
                 }
-                
-                // Rate limit: Only fetch if moved > 300m or zoom level changed
                 const center = map.getCenter();
-                if (lastFetchCenter && map.distance(center, lastFetchCenter) < 300 && zoom === lastFetchZoom) {
-                    return;
-                }
-
-                poiTimeout = setTimeout(fetchNearbyPOIs, 1500); // 1.5s debounce to help avoid 429
+                if (lastFetchCenter && map.distance(center, lastFetchCenter) < 300 && zoom === lastFetchZoom) return;
+                poiTimeout = setTimeout(fetchNearbyPOIs, 1500);
             });
 
             async function fetchNearbyPOIs() {
@@ -206,27 +237,28 @@
                 const bounds = map.getBounds();
                 const bbox = `${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()}`;
                 
-                // Querying for Amenities, Tourism, and Shops for both nodes and ways
-                const query = `[out:json][timeout:25];(node["amenity"](${bbox});node["tourism"](${bbox});node["shop"](${bbox});way["amenity"](${bbox});way["tourism"](${bbox});way["shop"](${bbox}););out center;`;
+                // Enhanced query specifically for supermarts, hypermarkets, and landmarks
+                const query = `[out:json][timeout:15];(
+                    node["shop"~"supermarket|convenience|grocery|department_store|mall"](${bbox});
+                    node["amenity"~"cafe|restaurant|bank|pharmacy|marketplace"](${bbox});
+                    node["tourism"](${bbox});
+                    way["shop"~"supermarket|mall"](${bbox});
+                );out center;`;
+                
                 const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
 
                 try {
-                    showStatus("Discovering local spots...");
+                    showStatus("Discovering nearby places...");
                     const response = await fetch(url, { signal: discoveryAbortController.signal });
                     
                     if (response.status === 429) {
                         discoveryCooldown = true;
-                        showStatus("Discovery service busy. Please wait 10s...", 5000);
+                        showStatus("Service busy. Waiting 10s...", 5000);
                         setTimeout(() => { discoveryCooldown = false; }, 10000);
                         return;
                     }
 
-                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-
-                    const contentType = response.headers.get("content-type");
-                    if (!contentType || !contentType.includes("application/json")) {
-                        throw new Error("Received non-JSON response from discovery service.");
-                    }
+                    if (!response.ok) return;
 
                     const data = await response.json();
                     lastFetchCenter = map.getCenter();
@@ -239,13 +271,23 @@
                             const lon = el.lon || (el.center ? el.center.lon : null);
                             if (!lat || !lon || !el.tags.name) return;
                             
-                            const dotIcon = L.divIcon({ className: 'custom-poi', html: '<div class="poi-dot"></div>', iconSize: [10, 10] });
-                            const poiMarker = L.marker([lat, lon], { icon: dotIcon }).addTo(poiLayer);
+                            // Categorization for Orange vs Blue filter
+                            const shopTypes = ['supermarket', 'convenience', 'grocery', 'department_store', 'mall'];
+                            const isSupermart = shopTypes.includes(el.tags.shop) || el.tags.amenity === 'marketplace';
+                            const poiTypeClass = isSupermart ? 'poi-shop' : 'poi-other';
                             
-                            const type = el.tags.amenity || el.tags.tourism || el.tags.shop || "Location";
+                            const dotIcon = L.divIcon({ 
+                                className: 'custom-poi', 
+                                html: `<div class="poi-dot ${poiTypeClass}"></div>`, 
+                                iconSize: [12, 12] 
+                            });
+                            
+                            const poiMarker = L.marker([lat, lon], { icon: dotIcon }).addTo(poiLayer);
+                            const typeLabel = el.tags.shop || el.tags.amenity || el.tags.tourism || "Point of Interest";
+                            
                             poiMarker.bindPopup(`
                                 <div class="poi-popup-content">
-                                    <small>${type.replace(/_/g, ' ')}</small>
+                                    <small style="color:${isSupermart ? 'var(--poi-shop)' : 'var(--poi-other)'}">${typeLabel.replace(/_/g, ' ')}</small>
                                     <strong>${el.tags.name}</strong>
                                     <button class="btn-add-poi" onclick="window.pinPOI('${el.tags.name.replace(/'/g, "\\'")}', ${lat}, ${lon})">Add to My Pins</button>
                                 </div>
@@ -254,10 +296,7 @@
                         showStatus("Places discovered", 1500);
                     }
                 } catch (e) {
-                    if (e.name !== 'AbortError') {
-                        console.error("Discovery error", e);
-                        showStatus("Discovery service temporarily unavailable", 2000);
-                    }
+                    if (e.name !== 'AbortError') showStatus("Discovery paused.", 2000);
                 }
             }
 
@@ -266,10 +305,15 @@
                 openPinForm({lat, lng: lon}, name);
             };
 
-            // --- PRO SEARCH (Nominatim) ---
+            // --- SEARCH & QUICK ACTIONS ---
             const searchInput = document.getElementById('search-input');
             const searchResults = document.getElementById('search-results');
             let searchTimeout;
+
+            window.quickSearch = (term) => {
+                searchInput.value = term;
+                searchInput.dispatchEvent(new Event('input'));
+            };
 
             searchInput.addEventListener('input', () => {
                 const query = searchInput.value.trim();
@@ -290,12 +334,11 @@
             function renderSearchResults(results) {
                 searchResults.innerHTML = '';
                 if (!results.length) { searchResults.style.display = 'none'; return; }
-                
                 results.forEach(res => {
                     const type = (res.type || 'Location').replace(/_/g, ' ');
                     const div = document.createElement('div');
                     div.className = 'search-item';
-                    const cityInfo = res.address ? (res.address.city || res.address.town || res.address.village || res.address.state || '') : '';
+                    const cityInfo = res.address ? (res.address.city || res.address.town || res.address.state || '') : '';
                     div.innerHTML = `
                         <span class="place-name">${res.display_name.split(',')[0]}</span>
                         <span class="place-type">${type} • ${cityInfo}</span>
@@ -366,10 +409,10 @@
                 });
             }
 
-            // --- ROUTING ENGINE (OSRM) ---
+            // --- ROUTING ENGINE ---
             window.runOptimization = async function(color) {
                 const group = savedPins.filter(p => p.color === color);
-                if (!group.length) return showStatus("No pins in this group");
+                if (!group.length) return showStatus("No pins found");
                 
                 routeLayer.clearLayers();
                 currentRouteOrderMap = {};
@@ -408,15 +451,15 @@
                     const resp = await fetch(`https://router.project-osrm.org/route/v1/driving/${cStr}?overview=full&geometries=geojson`);
                     const data = await resp.json();
                     
-                    if (data.code !== 'Ok') throw new Error("Routing failed");
+                    if (data.code !== 'Ok') throw new Error();
                     
                     const roadLine = L.polyline(data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]), { color, weight: 6, opacity: 0.8 }).addTo(routeLayer);
                     renderPins();
                     map.fitBounds(roadLine.getBounds(), { padding: [50, 50] });
                     showStatus(`Trip: ${(data.routes[0].distance/1000).toFixed(2)} km`, 5000);
                 } catch (e) { 
-                    showStatus("Road API Busy. Falling back to direct lines.");
-                    const line = L.polyline(points.map(p => [p.lat, p.lng]), { color, weight: 4, dashArray: '5, 10' }).addTo(routeLayer);
+                    showStatus("Road Busy. Using direct lines.");
+                    L.polyline(points.map(p => [p.lat, p.lng]), { color, weight: 4, dashArray: '5, 10' }).addTo(routeLayer);
                     renderPins();
                 }
                 document.getElementById('route-panel').style.display = 'none';
@@ -429,9 +472,11 @@
             };
 
             function showStatus(msg, dur = 3000) {
-                const s = document.getElementById('status');
-                s.innerText = msg; s.style.display = 'block';
-                if (dur > 0) setTimeout(() => { if(s.innerText === msg) s.style.display = 'none'; }, dur);
+                const s = document.getElementById('status-container');
+                const t = document.getElementById('status-text');
+                t.innerText = msg;
+                s.style.display = 'flex';
+                if (dur > 0) setTimeout(() => { if(t.innerText === msg) s.style.display = 'none'; }, dur);
             }
 
             function parseGoogleCoords(s) {
